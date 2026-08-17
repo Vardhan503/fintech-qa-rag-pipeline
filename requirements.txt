@@ -5,3 +5,7 @@ jupyter>=1.0
 sentence-transformers>=3.0
 requests>=2.31
 pytest>=8.0
+# faiss-cpu: install via conda, NOT pip (pip wheel segfaults on Apple Silicon arm64)
+#   conda install -c conda-forge faiss-cpu
+chromadb>=1.0
+qdrant-client>=1.9
