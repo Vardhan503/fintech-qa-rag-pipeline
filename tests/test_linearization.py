@@ -8,6 +8,7 @@ without crashing and without silently discarding the row's values.
 
 import pytest
 
+from src.chunking.row_group import WHOLE_TABLE, build_row_group_chunks, group_table_rows
 from src.chunking.row_level import linearize_table_from_clean, linearize_text
 from src.data.cleaning import clean_table
 from src.data.reconstruction import build_documents
@@ -92,6 +93,46 @@ def test_no_ragged_table_crashes_across_real_corpus(raw_data):
             pytest.fail(f"{doc['doc_id']} raised IndexError: {exc}")
 
     assert ragged_seen > 0, "expected the corpus to contain ragged tables to exercise the fallback"
+
+
+def test_row_group_of_one_matches_the_row_level_baseline():
+    table = [["h", "2008"], ["a", "1"], ["b", "2"], ["c", "3"]]
+
+    assert group_table_rows(table, 1) == [c["text"] for c in linearize_table_from_clean(table)]
+
+
+def test_row_group_concatenates_n_rows_and_keeps_the_remainder():
+    table = [["h", "2008"], ["a", "1"], ["b", "2"], ["c", "3"]]
+    groups = group_table_rows(table, 2)
+
+    assert len(groups) == 2                      # 3 rows at 2 per group -> 2 + 1
+    assert "a:" in groups[0] and "b:" in groups[0]
+    assert "c:" in groups[1]
+
+
+def test_large_group_collapses_to_a_single_chunk():
+    table = [["h", "2008"], ["a", "1"], ["b", "2"], ["c", "3"]]
+
+    assert len(group_table_rows(table, WHOLE_TABLE)) == 1
+
+
+def test_row_group_rejects_a_zero_group_size():
+    with pytest.raises(ValueError):
+        group_table_rows([["h", "a"], ["r", "1"]], 0)
+
+
+def test_row_group_chunks_keep_text_lines_unchanged():
+    doc = {
+        "doc_id": "ACME/2020/page_1.pdf",
+        "table": [["h", "2008"], ["a", "1"], ["b", "2"]],
+        "pre_text": [{"text": "intro", "is_noise": False}],
+        "post_text": [{"text": "outro", "is_noise": False}],
+    }
+    chunks = build_row_group_chunks(doc, 2)
+
+    text_chunks = [c for c in chunks if c["chunk_type"] == "text_line"]
+    assert [c["text"] for c in text_chunks] == ["intro", "outro"]
+    assert all(c["chunk_id"].startswith("ACME/2020/page_1.pdf::") for c in chunks)
 
 
 def test_clean_table_output_is_what_the_linearizer_consumes(raw_data):

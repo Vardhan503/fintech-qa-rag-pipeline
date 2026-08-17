@@ -29,6 +29,26 @@ Reading the table: the naive control has the best *retrieval* recall yet the wor
 content-overlap matching while still handing the model a blob it can't compute
 from. That gap is the whole argument for evaluating generation, not just retrieval.
 
+### Table chunk size
+
+Row-level and whole-table are the two ends of one dial, so
+`scripts/run_chunk_size_sweep.py` measures the middle (retrieval only, recall@5
+over the 818 questions that carry gold annotations):
+
+| Rows per table chunk | Chunks | Recall@5 |
+|---|---|---|
+| 1 (row-level) | 8,931 | 62.8% |
+| 2 | 8,189 | 67.7% |
+| 3 | 7,918 | 70.4% |
+| **5** | 7,718 | **71.3%** |
+| whole table | 7,575 | 70.2% |
+
+Recall climbs steeply from 1 to 3 rows and then flattens, so most of the benefit
+is simply *not splitting related rows apart* rather than table-level context per
+se. Five rows edges out the whole table by 1.1 points, which is inside the noise
+on 818 questions — the honest read is that anything from 3 rows up performs about
+the same, and one row per chunk is the clear loser.
+
 ## The dataset problem this project is really about
 
 FinQA labels gold evidence as **positional indices** — `ann_table_rows: [3]` means
@@ -59,7 +79,8 @@ notebooks/
   02_chunking_lab.ipynb          # strategy comparison; calls src/chunking/* + src/eval/*
 src/
   data/       loader.py  cleaning.py  reconstruction.py
-  chunking/   row_level.py  naive_fixed.py  whole_table.py  sentence_window.py  parent_child.py
+  chunking/   row_level.py  naive_fixed.py  whole_table.py  sentence_window.py
+              row_group.py  parent_child.py
   eval/       gold_mapping.py  retrieval_harness.py  generation_harness.py  sampling.py
   utils/      io.py
 scripts/      run_preprocessing.py  build_chunking_strategies.py
@@ -81,7 +102,7 @@ them:
 | Field | Meaning |
 |---|---|
 | `chunk_id` | `{doc_id}::{chunk_type}::{row_index}` |
-| `chunk_type` | `table_row`, `text_line`, `whole_table`, `text_window`, `fixed_size` |
+| `chunk_type` | `table_row`, `text_line`, `whole_table`, `text_window`, `fixed_size`, `row_group` |
 | `row_index` | Table rows count from 1 (row 0 is the header); text lines index into `pre_text + post_text` |
 | `text` | Linearized sentence, raw line, or character window |
 | `is_noise` | Flagged junk line — kept for index alignment, excluded from retrieval |
@@ -115,6 +136,7 @@ ollama pull qwen2.5:7b-instruct
 python scripts/run_preprocessing.py           # dev.json -> documents, chunks, eval_dataset
 python scripts/build_chunking_strategies.py   # strategies 2-4 -> chunks_*.jsonl
 python scripts/run_retrieval_eval.py          # -> eval_results_*.json          (~5 min)
+python scripts/run_chunk_size_sweep.py        # -> eval_results_chunk_size.json (~2 min)
 python scripts/run_generation_eval.py         # -> eval_results_generation.json (~15-20 min, needs Ollama)
 python scripts/build_comparison_report.py     # table + chart
 pytest                                        # 38 tests

@@ -96,6 +96,40 @@ def gold_text_index(row_level_chunks: list[dict]) -> dict[str, str]:
     return {c["chunk_id"]: c["text"] for c in row_level_chunks}
 
 
+def recall_at_k_by_content(chunks: list[dict], eval_examples: list[dict],
+                            chunk_id_to_gold_text: dict, model: SentenceTransformer,
+                            k: int = 5) -> dict:
+    """Single-k content-overlap recall, for sweeping a chunking parameter.
+
+    Questions with no gold annotation (65 of the 883 dev questions) are excluded
+    from the denominator rather than counted as misses, which is also how
+    evaluate_chunking_strategy_generic averages -- keeping the two comparable.
+    """
+    chunk_ids = [c["chunk_id"] for c in chunks]
+    chunk_texts = [c["text"] for c in chunks]
+    chunk_vecs = embed_texts(chunk_texts, model)
+    query_vecs = embed_texts([e["question"] for e in eval_examples], model)
+    id_to_text = dict(zip(chunk_ids, chunk_texts))
+
+    found, scored = 0, 0
+    for i, ex in enumerate(eval_examples):
+        gold_texts = [chunk_id_to_gold_text[g] for g in ex["gold_chunk_ids"] if g in chunk_id_to_gold_text]
+        if not gold_texts:
+            continue
+        scored += 1
+
+        retrieved_ids = cosine_top_k(query_vecs[i], chunk_vecs, chunk_ids, k=k)
+        if any(word_overlap_relevance(id_to_text[cid], gt)
+               for cid in retrieved_ids for gt in gold_texts):
+            found += 1
+
+    return {
+        "recall": found / scored if scored else 0.0,
+        "n_scored": scored,
+        "n_chunks": len(chunks),
+    }
+
+
 def evaluate_chunking_strategy_generic(chunks: list[dict], eval_examples: list[dict],
                                         chunk_id_to_gold_text: dict, model: SentenceTransformer,
                                         k_values=(1, 3, 5, 10)) -> dict:

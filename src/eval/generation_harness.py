@@ -142,3 +142,60 @@ def run_generation_eval(strategy_chunks: list[dict], sample: list[dict], model,
         "n": n,
         "results": results,
     }
+
+
+
+def run_parent_child_eval(index_chunks: list[dict], parent_text_map: dict[str, str],
+                          sample: list[dict], model, top_k: int = 5,
+                          llm_model: str = LLM_MODEL, verbose: bool = True) -> dict:
+    """Strategy 5: retrieve row-level children, expand context to their parent table.
+
+    index_chunks  -- row-level chunks; these go into the vector index (same as strategy 1).
+    parent_text_map -- child chunk_id -> parent context text, from
+                       src.chunking.parent_child.build_parent_text_map(documents).
+
+    Retrieval is scored against gold_chunk_ids exactly like strategy 1 (same id
+    scheme), so retrieval_hit_rate IS comparable across strategies here.
+    Context for the LLM is the deduplicated parent texts for the top-k children,
+    which is usually one whole table plus any relevant text windows.
+    """
+    chunk_ids = [c["chunk_id"] for c in index_chunks]
+    chunk_texts = [c["text"] for c in index_chunks]
+
+    chunk_vecs = embed_texts(chunk_texts, model)
+    query_vecs = embed_texts([e["question"] for e in sample], model)
+
+    results = []
+    for i, ex in enumerate(sample):
+        retrieved_ids = cosine_top_k(query_vecs[i], chunk_vecs, chunk_ids, k=top_k)
+
+        # expand each retrieved child to its parent context, deduplicating so the same
+        # table doesn't appear twice when two rows from it are retrieved
+        seen, context = set(), []
+        for child_id in retrieved_ids:
+            parent_text = parent_text_map.get(child_id, "")
+            if parent_text and parent_text not in seen:
+                seen.add(parent_text)
+                context.append(parent_text)
+
+        try:
+            raw = call_llm(build_prompt(ex["question"], context), llm_model=llm_model)
+        except Exception as exc:
+            raw = ""
+            print(f"  LLM call failed on {ex.get('id')}: {exc}")
+
+        pred = extract_final_answer(raw)
+        correct = answers_match(ex["exe_ans"], pred)
+        results.append({
+            "id": ex.get("id"),
+            "question": ex["question"],
+            "exe_ans": ex["exe_ans"],
+            "generated": pred,
+            "correct": correct,
+            "retrieved_ids": retrieved_ids,
+            "context_chars": sum(len(c) for c in context),
+            "gold_hit": bool(set(retrieved_ids) & set(ex.get("gold_chunk_ids", []))),
+        })
+        if verbose:
+            mark = "\u2713" if correct else "\u2717"
+            print(f"{mark}  exe_ans={ex['exe_ans']:<12} generated={pred[:40]!r}")
