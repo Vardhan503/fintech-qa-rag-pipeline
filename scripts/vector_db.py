@@ -33,17 +33,24 @@ model = SentenceTransformer("BAAI/bge-small-en-v1.5", device="cpu")
 # ---------- Step 1: load chunks ----------
 chunks = [c for c in load_jsonl("data/processed/chunks_whole_table.jsonl")
           if not c.get("is_noise", False)]
-eval_examples    = load_jsonl("data/processed/eval_dataset.jsonl")
+eval_examples = load_jsonl("data/processed/eval_dataset.jsonl")
 
-chunk_ids      = [c["chunk_id"] for c in chunks]
-chunk_texts    = [c["text"]     for c in chunks]
+# NEW: this is the fix. Our gold_chunk_ids are written in ROW-LEVEL format
+# (doc::table_row::3), but whole-table chunks have DIFFERENT ids
+# (doc::whole_table::0) — they can never match by ID even when correct.
+# So instead of comparing IDs, we look up what TEXT each gold_chunk_id
+# actually points to, and check if that text shows up inside whatever
+# we retrieved. This works no matter what chunking strategy we're testing.
+row_level_chunks = load_jsonl("data/processed/chunks.jsonl")
+gold_text_lookup = {c["chunk_id"]: c["text"] for c in row_level_chunks}
+
+chunk_ids = [c["chunk_id"] for c in chunks]
+chunk_texts = [c["text"] for c in chunks]
 question_texts = [ex["question"] for ex in eval_examples]
 
 print(f"Loaded {len(chunks)} chunks and {len(eval_examples)} questions.")
 
 # ---------- Step 2: embed once, reuse for all three tools ----------
-# convert_to_tensor=False → sentence_transformers returns a plain numpy array directly,
-# avoiding the PyTorch tensor → CPU → numpy view chain entirely.
 print("Embedding chunks...")
 chunk_vectors = np.asarray(
     model.encode(chunk_texts, normalize_embeddings=True,
@@ -65,18 +72,35 @@ print(f"chunk_vectors : {chunk_vectors.shape}  dtype={chunk_vectors.dtype}  "
       f"C-contiguous={chunk_vectors.flags['C_CONTIGUOUS']}")
 print(f"question_vecs : {question_vectors.shape}")
 
-# ---------- Step 3: ID-based Recall@5 ----------
-# A question is "found" when at least one of the retrieved chunk_ids matches
-# a gold_chunk_id. This is exact — no word-overlap approximation.
-def check_recall(get_top5_ids_fn):
+# ---------- Step 3: content-based Recall@5 (the fix) ----------
+def word_overlap(retrieved_text, gold_text, threshold=0.6):
+    """Simple check: does the retrieved text contain most of the gold
+    answer's words? Works across DIFFERENT chunk id schemes."""
+    gold_words = set(w.lower().strip(".,;:()") for w in gold_text.split())
+    retrieved_words = set(w.lower().strip(".,;:()") for w in retrieved_text.split())
+    if not gold_words:
+        return False
+    overlap = len(gold_words & retrieved_words) / len(gold_words)
+    return overlap >= threshold
+
+
+def check_recall(get_top5_texts_fn):
+    """get_top5_texts_fn(question_index) -> list of 5 text strings (not ids!)"""
     found = 0
     scorable = 0
     for i, ex in enumerate(eval_examples):
-        gold = set(ex["gold_chunk_ids"])
-        if not gold:
+        gold_ids = ex["gold_chunk_ids"]
+        gold_texts = [gold_text_lookup[g] for g in gold_ids if g in gold_text_lookup]
+        if not gold_texts:
             continue
         scorable += 1
-        if gold & set(get_top5_ids_fn(i)):
+        top5_texts = get_top5_texts_fn(i)
+        found_here = False
+        for retrieved_text in top5_texts:
+            for gold_text in gold_texts:
+                if word_overlap(retrieved_text, gold_text):
+                    found_here = True
+        if found_here:
             found += 1
     return found / scorable if scorable else 0.0
 
@@ -98,10 +122,10 @@ t0 = time.time()
 _, faiss_indices = faiss_index.search(question_vectors, 5)
 faiss_search_time = time.time() - t0
 
-def faiss_get_top5_ids(qi):
-    return [chunk_ids[i] for i in faiss_indices[qi]]
+def faiss_get_top5_texts(qi):
+    return [chunk_texts[i] for i in faiss_indices[qi]]
 
-faiss_recall = check_recall(faiss_get_top5_ids)
+faiss_recall = check_recall(faiss_get_top5_texts)
 results["FAISS"] = {"build_time": faiss_build_time, "search_time": faiss_search_time, "recall": faiss_recall}
 print(f"  build={faiss_build_time:.2f}s  search={faiss_search_time:.2f}s  recall={faiss_recall:.1%}")
 
@@ -134,10 +158,10 @@ t0 = time.time()
 chroma_res = chroma_col.query(query_embeddings=question_vectors.tolist(), n_results=5)
 chroma_search_time = time.time() - t0
 
-def chroma_get_top5_ids(qi):
-    return chroma_res["ids"][qi]   # ChromaDB returns the IDs we inserted
+def chroma_get_top5_texts(qi):
+    return chroma_res["documents"][qi]   # ChromaDB returns the actual text back
 
-chroma_recall = check_recall(chroma_get_top5_ids)
+chroma_recall = check_recall(chroma_get_top5_texts)
 results["ChromaDB"] = {"build_time": chroma_build_time, "search_time": chroma_search_time, "recall": chroma_recall}
 print(f"  build={chroma_build_time:.2f}s  search={chroma_search_time:.2f}s  recall={chroma_recall:.1%}")
 
@@ -162,7 +186,7 @@ qclient.upsert(
     collection_name="finqa_chunks",
     points=[
         PointStruct(id=i, vector=chunk_vectors[i].tolist(),
-                    payload={"chunk_id": chunk_ids[i]})
+                    payload={"chunk_id": chunk_ids[i], "text": chunk_texts[i]})
         for i in range(len(chunks))
     ],
 )
@@ -179,10 +203,10 @@ qdrant_res = [
 ]
 qdrant_search_time = time.time() - t0
 
-def qdrant_get_top5_ids(qi):
-    return [hit.payload["chunk_id"] for hit in qdrant_res[qi]]
+def qdrant_get_top5_texts(qi):
+    return [hit.payload["text"] for hit in qdrant_res[qi]]
 
-qdrant_recall = check_recall(qdrant_get_top5_ids)
+qdrant_recall = check_recall(qdrant_get_top5_texts)
 results["Qdrant"] = {"build_time": qdrant_build_time, "search_time": qdrant_search_time, "recall": qdrant_recall}
 print(f"  build={qdrant_build_time:.2f}s  search={qdrant_search_time:.2f}s  recall={qdrant_recall:.1%}")
 
