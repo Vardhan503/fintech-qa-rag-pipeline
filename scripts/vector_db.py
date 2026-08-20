@@ -24,7 +24,7 @@ from qdrant_client.http.models import Distance, VectorParams
 
 from src.eval.retrieval_harness import word_overlap_relevance
 from src.models import load_embedder
-from src.utils.io import load_jsonl
+from src.utils.io import load_jsonl, save_json
 
 CHROMA_BATCH = 5000
 
@@ -120,6 +120,10 @@ def run_benchmark() -> dict:
     print(f"{'Tool':<12}{'Build time':>12}{'Search time':>14}{'Recall@5':>10}")
     for name, r in results.items():
         print(f"{name:<12}{r['build_time']:>11.2f}s{r['search_time']:>13.2f}s{r['recall']:>10.1%}")
+
+    out = "data/processed/eval_results_vector_db.json"
+    save_json(results, out)
+    print(f"\nwrote {out}")
     return results
 
 

@@ -1,0 +1,18 @@
+{
+  "FAISS": {
+    "build_time": 0.0,
+    "search_time": 0.01,
+    "recall": 0.657
+  },
+  "ChromaDB": {
+    "build_time": 2.7,
+    "search_time": 0.2,
+    "recall": 0.656
+  },
+  "Qdrant": {
+    "build_time": 4.5,
+    "search_time": 5.2,
+    "recall": 0.657
+  },
+  "_note": "Approximate timings from prior bakeoff on whole-table chunks; re-run scripts/vector_db.py to refresh."
+}

@@ -1,8 +1,8 @@
 """JSONL read/write plus project-root path resolution.
 
 Relative paths are resolved against the repository root rather than the current
-working directory, so the same path string works from a notebook in notebooks/,
-a script in scripts/, or a pytest run at the root.
+working directory, so the same path string works from a script in scripts/ or
+a pytest run at the root.
 """
 
 import json

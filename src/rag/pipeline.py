@@ -1,8 +1,4 @@
-"""RAG pipeline: LangChain retriever + ChatOllama over whole-table chunks.
-
-Uses QdrantVectorStore for persistence and HuggingFaceEmbeddings for the same
-BGE model as the eval harness. FinQA-specific chunking still lives in src/chunking.
-"""
+"""RAG pipeline: retrieve whole-table chunks from Qdrant, answer with ChatOllama."""
 
 import os
 

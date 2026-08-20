@@ -1,1 +1,1 @@
-"""FinQA RAG: chunking-strategy comparison over the FinQA dev set."""
+"""FinQA RAG: compare chunking strategies, vector stores, then answer questions."""

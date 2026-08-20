@@ -1,9 +1,9 @@
-"""Strategy 1 (baseline): one chunk per table row, one chunk per text line.
+"""One chunk per table row and per text line.
 
-row_index is kept identical to FinQA's own indexing -- table rows count from 1
-because row 0 is the header, and text lines are indexed across the concatenated
-pre_text + post_text exactly as ann_text_rows does it. That alignment is what
-lets gold_mapping build eval_dataset.jsonl by exact chunk_id.
+row_index matches FinQA's own indexing: table rows count from 1 because row 0
+is the header, and text lines are indexed across concatenated pre_text + post_text
+exactly as ann_text_rows does. That alignment is what lets gold_mapping build
+eval_dataset.jsonl by exact chunk_id.
 """
 
 from src.chunking import attach_chunk_ids

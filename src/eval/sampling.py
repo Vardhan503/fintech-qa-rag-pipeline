@@ -1,9 +1,8 @@
 """Question sampling for the (slow, local-LLM) generation eval.
 
-A uniform random sample would be dominated by divide/subtract, which together
-are over 75% of the dev set, and would barely touch table_min/table_max. Even
-coverage across operation types keeps a 44-question sample informative about
-where a chunking strategy actually breaks down.
+A uniform sample would be dominated by divide/subtract (~75% of the dev set)
+and would barely touch table_min/table_max. Stratifying by operation type keeps
+a 44-question sample informative.
 """
 
 import random
@@ -25,8 +24,7 @@ def group_by_op(eval_examples: list[dict]) -> dict[str, list[dict]]:
 
 
 def stratified_sample_by_op(eval_examples: list[dict], per_op_n: int = 5, seed: int = 42) -> list[dict]:
-    """Up to per_op_n questions per operation type. Seeded, so the sample is
-    fixed across strategy runs and the comparison stays apples-to-apples."""
+    """Up to per_op_n questions per operation type. Seeded so reruns stay comparable."""
     by_op = group_by_op(eval_examples)
     random.seed(seed)
 

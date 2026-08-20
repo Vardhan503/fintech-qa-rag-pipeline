@@ -1,15 +1,9 @@
 """Retrieval-only metrics: embed, cosine search, precision/recall @ k.
 
-Two evaluators live here and they are not interchangeable:
-
-  evaluate_chunking_strategy         exact chunk_id match against gold ids. Only
-                                    meaningful for strategies that reuse the
-                                    row-level id scheme, i.e. the baseline.
-  evaluate_chunking_strategy_generic content-overlap match. Valid ACROSS
-                                    strategies with different granularities and
-                                    id schemes -- use this for any cross-strategy
-                                    comparison, since a whole_table chunk can
-                                    never equal a table_row gold id by id alone.
+evaluate_chunking_strategy scores exact chunk_id match against gold ids. That
+only works for the row-level store. evaluate_chunking_strategy_generic scores
+content overlap, which is what the whole-table RAG index needs — a whole_table
+chunk can never equal a table_row gold id by id alone.
 """
 
 import numpy as np
@@ -96,11 +90,11 @@ def gold_text_index(row_level_chunks: list[dict]) -> dict[str, str]:
 def recall_at_k_by_content(chunks: list[dict], eval_examples: list[dict],
                             chunk_id_to_gold_text: dict, model: Embeddings,
                             k: int = 5) -> dict:
-    """Single-k content-overlap recall, for sweeping a chunking parameter.
+    """Single-k content-overlap recall.
 
     Questions with no gold annotation (65 of the 883 dev questions) are excluded
-    from the denominator rather than counted as misses, which is also how
-    evaluate_chunking_strategy_generic averages -- keeping the two comparable.
+    from the denominator rather than counted as misses, matching
+    evaluate_chunking_strategy_generic.
     """
     chunk_ids = [c["chunk_id"] for c in chunks]
     chunk_texts = [c["text"] for c in chunks]

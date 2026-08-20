@@ -1,6 +1,6 @@
 """Chunking strategies, one module per strategy.
 
-Every strategy returns chunk dicts with the same keys, so the eval harness can
+Every strategy returns chunk dicts with the same keys so the eval harness can
 consume any of them interchangeably:
 
     {chunk_type, row_index, text, chunk_id, doc_id, is_noise}

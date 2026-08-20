@@ -1,10 +1,9 @@
 """Strategy 3: the whole table as a single chunk, text still line-level.
 
-Best end-to-end answer accuracy so far (45.5% vs 40.9% for row-level). Text
-chunking is left identical to strategy 1 on purpose, so the only variable
-between the two runs is table granularity. The trade-off it exposes: row-level
-retrieval scores higher on precision, but most FinQA questions need two cells
-from the same table, and a whole-table chunk delivers both in one hit.
+Best end-to-end answer accuracy (45.5% vs 40.9% for row-level). Text chunking
+is left identical to strategy 1 so the only variable is table granularity.
+Most FinQA questions need two cells from the same table; a whole-table chunk
+delivers both in one hit — this is the production RAG index.
 """
 
 from src.chunking import attach_chunk_ids

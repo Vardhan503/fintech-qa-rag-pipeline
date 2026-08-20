@@ -1,13 +1,12 @@
 """raw dev.json -> documents.jsonl -> chunks.jsonl -> eval_dataset.jsonl
 
 Wiring only; the logic lives in src/data and src/chunking.
+Alternative chunk stores are built by scripts/build_chunking_strategies.py.
 """
 
 import sys
 from pathlib import Path
 
-# repo root on sys.path so `import src...` works both when this file is run
-# directly and when it is imported (e.g. from a notebook)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.chunking import build_all

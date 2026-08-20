@@ -1,17 +1,15 @@
 """End-to-end eval: retrieve, ask the LLM, grade the answer.
 
-LLM calls go through LangChain ChatOllama. Retrieval still uses the shared
-embedder + cosine top-k so every chunking strategy is scored the same way.
-
-Ground truth is exe_ans, the executed result of FinQA's program, not the
-`answer` string field -- `answer` is human-typed and noisy.
+LLM calls go through LangChain ChatOllama. Retrieval uses the shared embedder
+and cosine top-k. Ground truth is exe_ans, the executed FinQA program result,
+not the human-typed `answer` field.
 """
 
 import re
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from src.eval.retrieval_harness import cosine_top_k, embed_texts
+from src.eval.retrieval_harness import cosine_top_k, embed_texts, word_overlap_relevance
 from src.models import LLM_MODEL, load_llm
 
 PROMPT = ChatPromptTemplate.from_template(
@@ -83,7 +81,7 @@ def extract_final_answer(raw: str) -> str:
     return hits[-1].strip() if hits else (raw or "").strip()
 
 
-def _grade_one(ex, retrieved_ids, context, llm_model, verbose):
+def _grade_one(ex, retrieved_ids, context, llm_model, verbose, gold_texts=None):
     try:
         raw = call_llm(build_prompt(ex["question"], context), llm_model=llm_model)
     except Exception as exc:
@@ -95,6 +93,12 @@ def _grade_one(ex, retrieved_ids, context, llm_model, verbose):
     if verbose:
         mark = "\u2713" if correct else "\u2717"
         print(f"{mark}  exe_ans={ex['exe_ans']:<12} generated={pred[:40]!r}")
+
+    if gold_texts is not None:
+        gold_hit = any(word_overlap_relevance(ctx, gt) for ctx in context for gt in gold_texts)
+    else:
+        gold_hit = bool(set(retrieved_ids) & set(ex.get("gold_chunk_ids", [])))
+
     return {
         "id": ex.get("id"),
         "question": ex["question"],
@@ -103,7 +107,7 @@ def _grade_one(ex, retrieved_ids, context, llm_model, verbose):
         "correct": correct,
         "retrieved_ids": retrieved_ids,
         "context_chars": sum(len(c) for c in context),
-        "gold_hit": bool(set(retrieved_ids) & set(ex.get("gold_chunk_ids", []))),
+        "gold_hit": gold_hit,
     }
 
 
@@ -118,7 +122,8 @@ def _summarize(results: list[dict]) -> dict:
 
 
 def run_generation_eval(strategy_chunks: list[dict], sample: list[dict], model,
-                         top_k: int = 5, llm_model: str = LLM_MODEL, verbose: bool = True) -> dict:
+                         top_k: int = 5, llm_model: str = LLM_MODEL, verbose: bool = True,
+                         gold_text_by_id: dict | None = None) -> dict:
     """Retrieve top_k for each sampled question, generate, grade against exe_ans."""
     chunk_ids = [c["chunk_id"] for c in strategy_chunks]
     chunk_texts = [c["text"] for c in strategy_chunks]
@@ -131,28 +136,8 @@ def run_generation_eval(strategy_chunks: list[dict], sample: list[dict], model,
     for i, ex in enumerate(sample):
         retrieved_ids = cosine_top_k(query_vecs[i], chunk_vecs, chunk_ids, k=top_k)
         context = [id_to_text[cid] for cid in retrieved_ids]
-        results.append(_grade_one(ex, retrieved_ids, context, llm_model, verbose))
-    return _summarize(results)
-
-
-def run_parent_child_eval(index_chunks: list[dict], parent_text_map: dict[str, str],
-                          sample: list[dict], model, top_k: int = 5,
-                          llm_model: str = LLM_MODEL, verbose: bool = True) -> dict:
-    """Retrieve row-level children, expand context to parent tables, then generate."""
-    chunk_ids = [c["chunk_id"] for c in index_chunks]
-    chunk_texts = [c["text"] for c in index_chunks]
-
-    chunk_vecs = embed_texts(chunk_texts, model)
-    query_vecs = embed_texts([e["question"] for e in sample], model)
-
-    results = []
-    for i, ex in enumerate(sample):
-        retrieved_ids = cosine_top_k(query_vecs[i], chunk_vecs, chunk_ids, k=top_k)
-        seen, context = set(), []
-        for child_id in retrieved_ids:
-            parent_text = parent_text_map.get(child_id, "")
-            if parent_text and parent_text not in seen:
-                seen.add(parent_text)
-                context.append(parent_text)
-        results.append(_grade_one(ex, retrieved_ids, context, llm_model, verbose))
+        gold_texts = None
+        if gold_text_by_id is not None:
+            gold_texts = [gold_text_by_id[g] for g in ex.get("gold_chunk_ids", []) if g in gold_text_by_id]
+        results.append(_grade_one(ex, retrieved_ids, context, llm_model, verbose, gold_texts=gold_texts))
     return _summarize(results)

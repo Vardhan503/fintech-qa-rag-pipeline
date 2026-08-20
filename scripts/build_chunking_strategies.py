@@ -2,9 +2,6 @@
 
 Strategy 1 (row-level) is written by run_preprocessing.py because
 eval_dataset.jsonl's gold ids are derived from it.
-
-Strategy 6 (parent-child) shares the row-level index; its parent-text map
-is built at query time inside run_parent_child_eval.
 """
 
 import sys

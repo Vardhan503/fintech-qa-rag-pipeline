@@ -1,7 +1,5 @@
-pandas>=2.0
 numpy>=1.26
 matplotlib>=3.8
-jupyter>=1.0
 sentence-transformers>=3.0
 pytest>=8.0
 langchain>=0.3
@@ -12,7 +10,7 @@ langchain-ollama>=0.2
 langchain-community>=0.3
 langchain-chroma>=0.1
 langchain-qdrant>=0.2
-# faiss-cpu: install via conda, NOT pip (pip wheel segfaults on Apple Silicon arm64)
+# faiss-cpu: install via conda on Apple Silicon (pip wheel can segfault)
 #   conda install -c conda-forge faiss-cpu
 chromadb>=1.0
 qdrant-client>=1.9

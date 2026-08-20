@@ -1,218 +1,52 @@
-# Fin-Tech Q/A RAG Pipeline
+# FinQA RAG Pipeline
 
-A end-to-end RAG pipeline over the [FinQA](https://github.com/czyssrs/FinQA) development
-split: ingest financial filings, compare chunking strategies, benchmark vector stores,
-and answer questions with a local LLM.
+End-to-end RAG over the [FinQA](https://github.com/czyssrs/FinQA) development
+split: ingest financial filings, **compare chunking strategies**, **compare
+vector databases**, then answer questions with a local LLM.
 
-The central finding: **retrieval metrics and answer accuracy disagree**. Row-level
-chunking retrieves most precisely, but **whole-table chunking answers the most
-questions correctly** — because most FinQA questions need two cells from the same
-table, and only a whole-table chunk hands the model both at once.
+## Final choices (production)
+
+
+| Decision      | Choice                                                     | Why                                                                                    |
+| ------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Chunking**  | **Whole-table**                                            | Best answer accuracy (45.5%) — most FinQA questions need two cells from the same table |
+| **Vector DB** | **Qdrant**                                                 | Same recall as FAISS/Chroma (~65.7%), and persists to disk for the RAG app             |
+| **RAG**       | Whole-table chunks + Qdrant + Ollama `qwen2.5:7b-instruct` | Embeddings: `BAAI/bge-small-en-v1.5`                                                   |
+
+
+Retrieval metrics and answer accuracy disagree: naive fixed-size wins *retrieval*
+recall but loses on *answers*. Generation accuracy is what drove the chunking
+choice; on-disk persistence drove the vector DB choice (FAISS is in-memory only).
 
 ---
+
+
 
 ## Pipeline overview
 
 ```
-dev.json
+data/raw/dev.json
    │
-   ▼  preprocessing (clean, reconstruct pages, row-level chunks, gold mapping)
-documents.jsonl  chunks.jsonl  eval_dataset.jsonl
+   ▼  1. Preprocess
+documents.jsonl  chunks.jsonl (row-level gold)  eval_dataset.jsonl
    │
-   ▼  chunking lab (5 alternative strategies + row-group sweep + parent-child)
-chunks_*.jsonl  eval_results_*.json
+   ▼  2. Build alternate chunk stores
+chunks_naive_fixed / whole_table / sentence_window / grouped_5
    │
-   ▼  vector DB benchmark (FAISS vs ChromaDB vs Qdrant)
-chroma_db/  qdrant_db/
+   ▼  3. Evaluate chunking (retrieval + generation)
+eval_results_*.json
    │
-   ▼  RAG (whole-table chunks + Qdrant + Ollama)
+   ▼  4. Vector DB bakeoff (same whole-table chunks)
+FAISS vs ChromaDB vs Qdrant
+   │
+   ▼  5. Production RAG
+Qdrant (qdrant_db_final/) + Ollama
 question → retrieve top-k → generate → answer
 ```
 
-| Stage | What it does | Entry point |
-|---|---|---|
-| **1. Preprocessing** | Load FinQA, clean text/tables index-preserving, group by page, build row-level chunks and eval gold map | `scripts/run_preprocessing.py`, `notebooks/01_preprocessing_eda.ipynb` |
-| **2. Chunking lab** | Compare 6 chunking strategies on retrieval + generation | `scripts/build_chunking_strategies.py`, `notebooks/02_chunking_lab.ipynb` |
-| **3. Vector DB** | Same embeddings, three stores — build time, search time, recall | `scripts/vector_db.py`, `notebooks/vectordB_and_embeddings.ipynb` |
-| **4. RAG** | Production-style Q&A: embed question → Qdrant search → Ollama answer | `scripts/run_rag.py`, `src/rag/pipeline.py` |
-
 ---
 
-## Results
 
-### Chunking strategies (44-question stratified sample)
-
-`BAAI/bge-small-en-v1.5` for retrieval, `qwen2.5:7b-instruct` (local Ollama) for
-generation, top-k = 5.
-
-| Strategy | Chunks | P@5 | R@5 | R@10 | **Answer accuracy** |
-|---|---|---|---|---|---|
-| Row-level (baseline) | 8,931 | 0.123 | 0.474 | 0.557 | 40.9% |
-| Naive fixed-size (control) | 2,689 | 0.237 | 0.765 | 0.815 | 29.5% |
-| **Whole-table** | 7,575 | 0.205 | 0.709 | 0.798 | **45.5%** |
-| Sentence-window | 8,931 | 0.328 | 0.652 | 0.722 | 36.4% |
-| Row-group-5 | 7,718 | — | — | — | (run `run_generation_eval.py`) |
-| Parent-child | 8,931 index | — | — | — | (run `run_generation_eval.py`) |
-
-![Recall@k by strategy](data/processed/chunking_comparison.png)
-
-The naive control has the best *retrieval* recall yet the worst *answer* accuracy.
-Long character windows overlap enough text to score well on content-overlap matching
-while still handing the model a blob it cannot compute from. That gap is the argument
-for evaluating generation, not just retrieval.
-
-### Table chunk size sweep (retrieval only, recall@5)
-
-Row-level and whole-table are the two ends of one dial. Middle points measured with
-`scripts/run_chunk_size_sweep.py` (818 questions with gold annotations):
-
-| Rows per table chunk | Chunks | Recall@5 |
-|---|---|---|
-| 1 (row-level) | 8,931 | 62.8% |
-| 2 | 8,189 | 67.7% |
-| 3 | 7,918 | 70.4% |
-| **5** | 7,718 | **71.3%** |
-| whole table | 7,575 | 70.2% |
-
-Recall climbs steeply from 1 to 3 rows and then flattens. Five rows edges out whole
-table by ~1 pp — inside the noise on 818 questions.
-
-### Vector DB benchmark (whole-table chunks, content-overlap recall@5)
-
-Same 7,176 chunks and 883 questions, embeddings computed once:
-
-| Tool | Build time | Search time (883 q) | Recall@5 |
-|---|---|---|---|
-| **FAISS** | ~0.00s | ~0.01s | 65.7% |
-| ChromaDB | ~2.7s | ~0.2s | 65.6% |
-| Qdrant | ~4.5s | ~5.2s | 65.7% |
-
-All three tie on recall (same vectors, same math). FAISS is fastest but in-memory
-only; ChromaDB and Qdrant persist to disk under `data/processed/`.
-
----
-
-## The dataset problem this project is really about
-
-FinQA labels gold evidence as **positional indices** — `ann_table_rows: [3]` means
-the fourth row of the table, `ann_text_rows: [7]` means the eighth line of
-`pre_text + post_text`. Three consequences drove most of the design:
-
-**1. Cleaning cannot drop lines.** The corpus has ~400 lines that are a lone `.`,
-and deleting them shifts every later index, silently repointing gold labels at the
-wrong sentence. `index_preserving_clean` is one-line-in, one-line-out and only
-*flags* `is_noise`; flagged chunks are excluded at index time instead.
-Locked in by `tests/test_cleaning.py`.
-
-**2. Pages repeat.** 883 questions cover only 299 distinct pages, so documents are
-grouped by filename with a `qa_ids` backlink rather than embedded once per question.
-
-**3. `exe_ans`, not `answer`, is ground truth.** The human-typed `answer` field is
-rounded and occasionally unrelated (`answer: '1%'` where `exe_ans: 0.015`). Grading
-against it would mark correct responses wrong. `answers_match` also handles percent
-scale ambiguity and boolean `"yes"` / `"no"` questions.
-Locked in by `tests/test_answer_matching.py`.
-
----
-
-## Project layout
-
-```
-notebooks/
-  01_preprocessing_eda.ipynb       # EDA + preprocessing narrative
-  02_chunking_lab.ipynb            # strategy comparison (retrieval + generation)
-  vectordB_and_embeddings.ipynb    # FAISS / ChromaDB / Qdrant + Simple RAG demo
-
-src/
-  data/          loader.py  cleaning.py  reconstruction.py
-  chunking/      row_level.py  naive_fixed.py  whole_table.py  sentence_window.py
-                 row_group.py  parent_child.py
-  eval/          gold_mapping.py  retrieval_harness.py  generation_harness.py  sampling.py
-  rag/           pipeline.py          # LangChain Qdrant retriever + ChatOllama
-  models.py      HuggingFaceEmbeddings + ChatOllama factories
-  utils/         io.py                # load_jsonl, resolve paths from project root
-
-scripts/
-  run_preprocessing.py             # dev.json → documents, chunks, eval_dataset
-  build_chunking_strategies.py     # strategies 2–5 → chunks_*.jsonl
-  run_retrieval_eval.py            # embedding retrieval metrics
-  run_chunk_size_sweep.py          # row-group granularity sweep
-  run_generation_eval.py           # end-to-end LLM accuracy (needs Ollama)
-  build_comparison_report.py       # summary table + recall@k chart
-  vector_db.py                     # FAISS vs ChromaDB vs Qdrant benchmark
-  run_rag.py                       # build index + ask questions
-
-tests/                             # pytest suite pinning known bugs
-data/
-  raw/dev.json                     # FinQA dev split (read-only source)
-  processed/                       # documents, chunk stores, eval results, vector DBs
-```
-
-## What is custom vs LangChain
-
-LangChain owns the generic RAG pieces:
-
-- **Naive chunking** — `RecursiveCharacterTextSplitter`
-- **Embeddings** — `HuggingFaceEmbeddings` wrapping `BAAI/bge-small-en-v1.5`
-- **LLM** — `ChatOllama` (`qwen2.5:7b-instruct`)
-- **RAG chain** — retriever | prompt | llm | parser (LCEL)
-- **Vector stores** — LangChain wrappers for FAISS, Chroma, Qdrant
-
-Custom code stays only where FinQA has no library equivalent:
-
-- index-preserving cleaning (gold row numbers must not shift)
-- table linearization (ragged multi-level headers)
-- gold `chunk_id` mapping from `ann_table_rows` / `ann_text_rows`
-- `answers_match` against `exe_ans` (percent scale + yes/no)
-- table-aware strategies (row-level, whole-table, row-group, parent-child)
-
----
-
-## Chunk schema
-
-Every strategy emits the same keys:
-
-| Field | Meaning |
-|---|---|
-| `chunk_id` | `{doc_id}::{chunk_type}::{row_index}` |
-| `chunk_type` | `table_row`, `text_line`, `whole_table`, `text_window`, `fixed_size`, `row_group` |
-| `row_index` | Table rows count from 1 (row 0 is header); text lines index into `pre_text + post_text` |
-| `text` | Linearized sentence, raw line, or character window |
-| `is_noise` | Flagged junk line — kept for index alignment, excluded from retrieval |
-| `doc_id` | Parent page, e.g. `V/2008/page_17.pdf` |
-
-For row-level chunks, `row_index` matches FinQA's own indexing, so gold references
-resolve to formatted `chunk_id` values with **0 unresolved references** in
-`eval_dataset.jsonl`.
-
----
-
-## Processed artifacts
-
-| File | Purpose |
-|---|---|
-| `documents.jsonl` | One unique page per line (299 docs) |
-| `chunks.jsonl` | Row-level baseline chunks (8,931) |
-| `chunks_whole_table.jsonl` | Whole-table strategy (7,575) |
-| `chunks_naive_fixed.jsonl` | 500-char fixed windows (2,689) |
-| `chunks_sentence_window.jsonl` | Sentence-window text (8,931) |
-| `chunks_grouped_5.jsonl` | 5 table rows per chunk (7,718) |
-| `chunks_parent_child_index.jsonl` | Row-level index for parent-child retrieval |
-| `eval_dataset.jsonl` | 883 questions with `gold_chunk_ids` |
-| `gen_eval_sample.jsonl` | Fixed 44-question stratified sample for generation eval |
-| `eval_results_*.json` | Per-strategy retrieval / generation scores |
-| `qdrant_db_final/` | Production RAG vector index (whole-table chunks) |
-
----
-
-## Two retrieval scorers
-
-- **`evaluate_chunking_strategy`** — exact `chunk_id` match. Only meaningful within
-  the row-level id scheme; a `whole_table` chunk can never equal a `table_row` gold id.
-- **`evaluate_chunking_strategy_generic`** — content-overlap match, valid *across*
-  granularities. Use this for cross-strategy comparison and vector DB benchmarks.
-
----
 
 ## Setup
 
@@ -226,43 +60,47 @@ conda install -c conda-forge faiss-cpu numpy libgfortran
 
 pip install -r requirements.txt
 
-# Generation eval + RAG: local Ollama
+# Generation eval + RAG need a local Ollama model
 ollama pull qwen2.5:7b-instruct
 ollama serve   # if not already running
 ```
 
-On Apple Silicon, set `device="cpu"` for SentenceTransformer (MPS can crash during
-encode). The scripts already do this.
+On Apple Silicon, embeddings run on CPU (`device="cpu"`) — MPS can crash mid-encode.
+The scripts already do this.
+
+Place FinQA `dev.json` at `data/raw/dev.json` if it is not already there.
 
 ---
 
-## Reproduce
+
+
+## Reproduce (full evaluation)
 
 Run from the project root:
 
 ```bash
-# 1. Preprocessing
+# 1. Preprocessing (documents + row-level gold chunks + eval set)
 python scripts/run_preprocessing.py
 
-# 2. Alternative chunk stores
+# 2. Alternative chunk stores (naive, whole-table, sentence-window, row-group-5)
 python scripts/build_chunking_strategies.py
 
-# 3. Retrieval evaluation (~5 min)
+# 3. Retrieval eval across all 5 strategies (~5 min)
 python scripts/run_retrieval_eval.py
 
-# 4. Chunk size sweep (~2 min, embedding only)
+# 4. Optional: table row-group size sweep (~2 min, no LLM)
 python scripts/run_chunk_size_sweep.py
 
-# 5. Generation evaluation (~20 min, needs Ollama)
+# 5. Generation eval (~15-20 min, needs Ollama)
 python scripts/run_generation_eval.py
 
-# 6. Summary table + chart
+# 6. Summary table + recall@k chart
 python scripts/build_comparison_report.py
 
-# 7. Vector DB benchmark (~2 min)
+# 7. Vector DB benchmark on whole-table chunks (~2 min)
 python scripts/vector_db.py
 
-# 8. RAG — build index once, then ask questions
+# 8. Production RAG — build index once, then ask
 python scripts/run_rag.py --setup
 python scripts/run_rag.py --ask "what is the average payment volume per transaction for american express?"
 
@@ -275,69 +113,212 @@ graded on identical questions across runs.
 
 ---
 
-## RAG usage
 
-```python
-from src.rag.pipeline import SimpleRAG
 
-rag = SimpleRAG()
-rag.setup()                              # embed + index whole-table chunks → qdrant_db_final/
-result = rag.ask("your question here")   # retrieve top-5 → Ollama → answer
-print(result["answer"])
-print(result["sources"])                 # retrieved chunk texts
-rag.close()
+## Results
+
+
+
+### 1. Chunking strategies
+
+`BAAI/bge-small-en-v1.5` for retrieval (content-overlap scoring),
+`qwen2.5:7b-instruct` for generation on a fixed **44-question** stratified sample,
+top-k = 5.
+
+
+| Strategy                   | Chunks | P@5       | R@5       | R@10      | **Answer accuracy** |
+| -------------------------- | ------ | --------- | --------- | --------- | ------------------- |
+| Row-level (baseline)       | 8,931  | 0.238     | 0.628     | 0.702     | 40.9%               |
+| Naive fixed-size (control) | 2,689  | 0.237     | **0.765** | **0.815** | 29.5%               |
+| **Whole-table ← chosen**   | 7,575  | 0.205     | 0.709     | 0.798     | **45.5%**           |
+| Sentence-window            | 8,931  | **0.329** | 0.654     | 0.722     | 36.4%               |
+| Row-group-5                | 7,718  | 0.231     | 0.713     | 0.790     | 45.7                |
+
+
+**Takeaway:** highest retrieval recall ≠ best answers. Whole-table hands the LLM
+both cells it needs in one chunk.
+
+#### Table chunk-size sweep (retrieval only, recall@5)
+
+
+| Rows per table chunk | Chunks | Recall@5  |
+| -------------------- | ------ | --------- |
+| 1 (row-level)        | 8,931  | 62.8%     |
+| 2                    | 8,189  | 67.7%     |
+| 3                    | 7,918  | 70.4%     |
+| **5**                | 7,718  | **71.3%** |
+| whole table          | 7,575  | 70.2%     |
+
+
+Five rows edges whole-table by ~1 pp on retrieval, but whole-table still wins
+generation — so production stays on whole-table.
+
+---
+
+
+
+### 2. Vector database comparison
+
+Same **whole-table** chunks (7,176 indexable), same embeddings, 883 questions,
+content-overlap recall@5:
+
+
+| Tool                | Build time | Search time (883 q) | Recall@5 |
+| ------------------- | ---------- | ------------------- | -------- |
+| FAISS               | ~0.00s     | ~0.01s              | 65.7%    |
+| ChromaDB            | ~2.7s      | ~0.2s               | 65.6%    |
+| **Qdrant ← chosen** | ~4.5s      | ~5.2s               | 65.7%    |
+
+
+All three tie on recall (same vectors, same math). FAISS is fastest but
+**in-memory only**. Chroma and Qdrant persist under `data/processed/`. Production
+RAG uses **Qdrant** at `data/processed/qdrant_db_final/`.
+
+Re-run with `python scripts/vector_db.py` (writes `eval_results_vector_db.json`).
+
+---
+
+
+
+### 3. RAG (final system)
+
 ```
-
-Or from the CLI:
+question
+  → embed (BGE small)
+  → Qdrant top-5 over whole-table chunks
+  → ChatOllama (qwen2.5:7b-instruct)
+  → ANSWER: line
+```
 
 ```bash
 python scripts/run_rag.py --setup --ask "your question"
 python scripts/run_rag.py --ask "another question"   # index already on disk
 ```
 
----
+```python
+from src.rag.pipeline import SimpleRAG
 
-## Chunking strategies
-
-| # | Strategy | Module | Idea |
-|---|---|---|---|
-| 1 | Row-level | `row_level.py` | One chunk per table row / text line — gold-aligned baseline |
-| 2 | Naive fixed-size | `naive_fixed.py` | LangChain `RecursiveCharacterTextSplitter` (500/50) over flat text — structure-blind control |
-| 3 | Whole-table | `whole_table.py` | Entire table as one chunk — best generation accuracy |
-| 4 | Sentence-window | `sentence_window.py` | Text line ± 1 neighbour; table rows unchanged |
-| 5 | Row-group-5 | `row_group.py` | Group 5 table rows per chunk |
-| 6 | Parent-child | `parent_child.py` | Retrieve on row-level children, expand to whole parent table for LLM context |
+rag = SimpleRAG()
+rag.setup()                              # whole-table → qdrant_db_final/
+result = rag.ask("your question here")
+print(result["answer"])
+print(result["sources"])
+rag.close()
+```
 
 ---
+
+
+
+## Chunking strategies (what each does)
+
+
+| #   | Strategy         | Module               | Idea                                                                          |
+| --- | ---------------- | -------------------- | ----------------------------------------------------------------------------- |
+| 1   | Row-level        | `row_level.py`       | One chunk per table row / text line — gold-aligned baseline                   |
+| 2   | Naive fixed-size | `naive_fixed.py`     | LangChain `RecursiveCharacterTextSplitter` (500/50) — structure-blind control |
+| 3   | **Whole-table**  | `whole_table.py`     | Entire table as one chunk — **production**                                    |
+| 4   | Sentence-window  | `sentence_window.py` | Text line ± 1 neighbour; table rows unchanged                                 |
+| 5   | Row-group-5      | `row_group.py`       | Group 5 table rows per chunk                                                  |
+
+
+Parent-child was evaluated earlier and dropped from this repo to keep the
+pipeline simpler; whole-table already delivers full-table context to the LLM.
+
+---
+
+
+
+## Project layout
+
+```
+src/
+  data/          loader.py  cleaning.py  reconstruction.py
+  chunking/      row_level.py  naive_fixed.py  whole_table.py
+                 sentence_window.py  row_group.py
+  eval/          gold_mapping.py  retrieval_harness.py
+                 generation_harness.py  sampling.py
+  rag/           pipeline.py          # Qdrant + ChatOllama
+  models.py      HuggingFaceEmbeddings + ChatOllama
+  utils/         io.py
+
+scripts/
+  run_preprocessing.py             # stage 1
+  build_chunking_strategies.py     # stage 2
+  run_retrieval_eval.py            # stage 3a
+  run_chunk_size_sweep.py          # stage 3b (optional)
+  run_generation_eval.py           # stage 3c
+  build_comparison_report.py       # stage 3d
+  vector_db.py                     # stage 4 — FAISS / Chroma / Qdrant
+  run_rag.py                       # stage 5
+
+tests/
+data/
+  raw/dev.json
+  processed/                       # chunks, eval JSON, vector DBs
+```
+
+
+
+## Custom vs LangChain
+
+**LangChain:** naive splitter, embeddings, ChatOllama, RAG LCEL chain, FAISS /
+Chroma / Qdrant wrappers.
+
+**Custom (FinQA-specific):** index-preserving cleaning, ragged table
+linearization, gold `chunk_id` mapping, `answers_match` vs `exe_ans`,
+table-aware chunkers.
+
+---
+
+
+
+## Chunk schema
+
+
+| Field        | Meaning                                                                             |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `chunk_id`   | `{doc_id}::{chunk_type}::{row_index}`                                               |
+| `chunk_type` | `table_row`, `text_line`, `whole_table`, `text_window`, `fixed_size`, `row_group`   |
+| `row_index`  | Table rows count from 1 (header is 0); text lines index into `pre_text + post_text` |
+| `text`       | Linearized sentence, raw line, character window, or pipe-delimited table            |
+| `is_noise`   | Flagged junk — kept for index alignment, excluded from retrieval                    |
+| `doc_id`     | Parent page, e.g. `V/2008/page_17.pdf`                                              |
+
+
+Cross-strategy retrieval uses **content overlap**, not exact id match — a
+`whole_table` chunk can never equal a `table_row` gold id.
+
+---
+
+
+
+## Dataset constraints that drove the design
+
+1. **Cleaning cannot drop lines.** FinQA gold labels are positional indices.
+  `index_preserving_clean` is one-line-in, one-line-out and only flags `is_noise`.
+2. **Pages repeat.** 883 questions → 299 unique pages; documents are grouped by
+  filename with a `qa_ids` backlink.
+3. **Grade against** `exe_ans`**, not** `answer`**.** The typed `answer` field is noisy
+  (`answer: '1%'` where `exe_ans: 0.015`).
+
+---
+
+
 
 ## Known gaps
 
-- **`retrieval_hit_rate` in generation eval uses exact id matching**, so it is not
-  comparable across strategies with different id schemes. It does not affect
-  `accuracy`. Parent-child uses row-level ids, so its hit rate *is* comparable to
-  strategy 1.
-- **`clean_line` only tightens parentheses around digits** — `( billions )` stays
-  spaced on ~2,100 lines. Pinned by test rather than silently rewritten.
-- **65 of 883 questions carry no gold rows** in FinQA's annotations.
-- Single embedding model, single judge LLM, one seed. Accuracy gaps between adjacent
-  strategies are a few percentage points on 44 questions — treat ordering of the
-  middle two as suggestive, not settled.
-- **FAISS is in-memory only** in the current RAG path; production index uses Qdrant
-  on disk.
+- Accuracy gaps between adjacent strategies are a few points on 44 questions —
+treat mid-pack ordering as suggestive.
+- 65 of 883 questions carry no gold rows in FinQA's annotations.
+- FAISS in the bakeoff is in-memory; production persistence is Qdrant.
+- Single embedding model, single judge LLM, one sample seed.
 
 ---
 
-## At 10x scale
 
-- Persist embeddings; swap brute-force dot product for ANN (FAISS HNSW or pgvector).
-- Add BM25 hybrid retrieval — financial questions lean on exact tokens (tickers,
-  fiscal years, line-item names).
-- Batch/concurrent LLM calls; generation eval currently dominates wall-clock time.
-- Cache per-document chunk output keyed by content hash.
-
----
 
 ## Data
 
-FinQA (Chen et al., EMNLP 2021), dev split only. Source:
-[czyssrs/FinQA](https://github.com/czyssrs/FinQA).
+FinQA (Chen et al., EMNLP 2021), dev split only.
+Source: [czyssrs/FinQA](https://github.com/czyssrs/FinQA).

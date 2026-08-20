@@ -3,8 +3,6 @@
 import sys
 from pathlib import Path
 
-# repo root on sys.path so `import src...` works both when this file is run
-# directly and when it is imported (e.g. from a notebook)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import matplotlib
@@ -17,17 +15,18 @@ RETRIEVAL_RESULTS = {
     "Naive fixed-size": "data/processed/eval_results_naive_fixed.json",
     "Whole-table": "data/processed/eval_results_whole_table.json",
     "Sentence-window": "data/processed/eval_results_sentence_window.json",
+    "Row-group-5": "data/processed/eval_results_row_group_5.json",
 }
 GENERATION_RESULTS = "data/processed/generation_comparison.json"
 GENERATION_DETAIL = "data/processed/eval_results_generation.json"
 CHART_PATH = "data/processed/chunking_comparison.png"
 
-# generation results are keyed by module-style names; map them onto the display labels
 GEN_KEY_BY_LABEL = {
     "Row-level (baseline)": "row_level",
     "Naive fixed-size": "naive_fixed",
     "Whole-table": "whole_table",
     "Sentence-window": "sentence_window",
+    "Row-group-5": "row_group_5",
 }
 
 
@@ -43,8 +42,7 @@ def load_retrieval_results() -> dict[str, dict[int, dict]]:
 
 def load_generation_accuracy() -> dict[str, float]:
     """Accepts either the slim {strategy: accuracy} file or the full per-question
-    file, and either key style, since runs from earlier sessions used the display
-    labels as keys."""
+    file, and either key style from earlier sessions."""
     for path in (GENERATION_RESULTS, GENERATION_DETAIL):
         if not resolve(path).exists():
             continue
@@ -77,7 +75,7 @@ def plot_recall_curves(retrieval: dict, out_path=CHART_PATH, show: bool = False)
         ax.plot(k_values, [res[k]["recall"] for k in k_values], marker="o", label=label)
     ax.set_xlabel("k")
     ax.set_ylabel("Recall@k")
-    ax.set_title("Chunking Strategy Comparison \u2014 Recall@k on FinQA dev set")
+    ax.set_title("Chunking Strategy Comparison — Recall@k on FinQA dev set")
     ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -102,7 +100,7 @@ def build_report(show: bool = False):
 
 
 def main() -> None:
-    matplotlib.use("Agg")   # headless when run as a script; notebooks keep their inline backend
+    matplotlib.use("Agg")
     build_report(show=False)
 
 
