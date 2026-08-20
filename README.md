@@ -128,7 +128,8 @@ src/
   chunking/      row_level.py  naive_fixed.py  whole_table.py  sentence_window.py
                  row_group.py  parent_child.py
   eval/          gold_mapping.py  retrieval_harness.py  generation_harness.py  sampling.py
-  rag/           pipeline.py          # SimpleRAG: Qdrant + Ollama
+  rag/           pipeline.py          # LangChain Qdrant retriever + ChatOllama
+  models.py      HuggingFaceEmbeddings + ChatOllama factories
   utils/         io.py                # load_jsonl, resolve paths from project root
 
 scripts/
@@ -147,8 +148,23 @@ data/
   processed/                       # documents, chunk stores, eval results, vector DBs
 ```
 
-Notebooks hold no logic — every function they call is imported from `src/`, so the
-same code path runs interactively and in scripts.
+## What is custom vs LangChain
+
+LangChain owns the generic RAG pieces:
+
+- **Naive chunking** — `RecursiveCharacterTextSplitter`
+- **Embeddings** — `HuggingFaceEmbeddings` wrapping `BAAI/bge-small-en-v1.5`
+- **LLM** — `ChatOllama` (`qwen2.5:7b-instruct`)
+- **RAG chain** — retriever | prompt | llm | parser (LCEL)
+- **Vector stores** — LangChain wrappers for FAISS, Chroma, Qdrant
+
+Custom code stays only where FinQA has no library equivalent:
+
+- index-preserving cleaning (gold row numbers must not shift)
+- table linearization (ragged multi-level headers)
+- gold `chunk_id` mapping from `ann_table_rows` / `ann_text_rows`
+- `answers_match` against `exe_ans` (percent scale + yes/no)
+- table-aware strategies (row-level, whole-table, row-group, parent-child)
 
 ---
 
@@ -286,7 +302,7 @@ python scripts/run_rag.py --ask "another question"   # index already on disk
 | # | Strategy | Module | Idea |
 |---|---|---|---|
 | 1 | Row-level | `row_level.py` | One chunk per table row / text line — gold-aligned baseline |
-| 2 | Naive fixed-size | `naive_fixed.py` | 500-char windows over flat text — structure-blind control |
+| 2 | Naive fixed-size | `naive_fixed.py` | LangChain `RecursiveCharacterTextSplitter` (500/50) over flat text — structure-blind control |
 | 3 | Whole-table | `whole_table.py` | Entire table as one chunk — best generation accuracy |
 | 4 | Sentence-window | `sentence_window.py` | Text line ± 1 neighbour; table rows unchanged |
 | 5 | Row-group-5 | `row_group.py` | Group 5 table rows per chunk |

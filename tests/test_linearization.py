@@ -8,6 +8,7 @@ without crashing and without silently discarding the row's values.
 
 import pytest
 
+from src.chunking.naive_fixed import flatten_document, naive_fixed_size_chunks
 from src.chunking.row_group import WHOLE_TABLE, build_row_group_chunks, group_table_rows
 from src.chunking.row_level import linearize_table_from_clean, linearize_text
 from src.data.cleaning import clean_table
@@ -139,3 +140,19 @@ def test_clean_table_output_is_what_the_linearizer_consumes(raw_data):
     ex = raw_data[0]
     chunks = linearize_table_from_clean(clean_table(ex["table_ori"]))
     assert chunks and all("<" not in c["text"] for c in chunks)
+
+
+def test_naive_fixed_uses_langchain_splitter_and_covers_the_document():
+    doc = {
+        "doc_id": "ACME/2020/page_1.pdf",
+        "pre_text": [{"text": "hello world " * 40, "is_noise": False}],
+        "table": [["h", "2008"], ["a", "1"]],
+        "post_text": [{"text": "goodbye " * 40, "is_noise": False}],
+    }
+    chunks = naive_fixed_size_chunks(doc)
+    assert chunks
+    assert all(c["chunk_type"] == "fixed_size" for c in chunks)
+    joined = " ".join(c["text"] for c in chunks)
+    assert "hello" in joined and "goodbye" in joined
+    assert flatten_document(doc).split()[0] in joined
+

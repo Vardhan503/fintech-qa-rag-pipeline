@@ -34,12 +34,7 @@ def main() -> None:
 
     rag = SimpleRAG()
     try:
-        if args.setup:
-            rag.setup(chunks_path=args.chunks, rebuild=True)
-        elif args.ask:
-            # allow ask-only if index already on disk from a prior setup
-            rag.is_ready = True
-
+        rag.setup(chunks_path=args.chunks, rebuild=args.setup)
         if args.ask:
             result = rag.ask(args.ask, top_k=args.top_k)
             print("\nQuestion:", result["question"])

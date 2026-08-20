@@ -1,123 +1,115 @@
-"""Simple RAG pipeline: question in -> Qdrant search -> Ollama -> answer out.
+"""RAG pipeline: LangChain retriever + ChatOllama over whole-table chunks.
 
-Uses whole-table chunks (best generation accuracy from the chunking lab) and
-persists the vector index under data/processed/qdrant_db_final/.
+Uses QdrantVectorStore for persistence and HuggingFaceEmbeddings for the same
+BGE model as the eval harness. FinQA-specific chunking still lives in src/chunking.
 """
 
 import os
 
-# macOS arm64: avoid tokenizer / BLAS threading races during encode
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-import numpy as np
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
-from sentence_transformers import SentenceTransformer
+from qdrant_client.http.models import Distance, VectorParams
 
-from src.eval.generation_harness import LLM_MODEL, build_prompt, call_llm, extract_final_answer
-from src.eval.retrieval_harness import MODEL_NAME, load_embedder
+from src.eval.generation_harness import extract_final_answer
+from src.models import LLM_MODEL, load_embedder, load_llm
 from src.utils.io import PROCESSED_DIR, load_jsonl, resolve
 
 COLLECTION_NAME = "finqa_chunks"
 DEFAULT_CHUNKS_PATH = "data/processed/chunks_whole_table.jsonl"
 QDRANT_PATH = PROCESSED_DIR / "qdrant_db_final"
 
+PROMPT = ChatPromptTemplate.from_template(
+    """You are a financial analyst. Answer using ONLY the context below.
+Keep your answer short. Finish with a line exactly like this: ANSWER: <number or short answer>
+
+Context:
+{context}
+
+Question: {question}
+"""
+)
+
+
+def _format_docs(docs: list[Document]) -> str:
+    return "\n".join(f"[{i + 1}] {d.page_content}" for i, d in enumerate(docs))
+
 
 class SimpleRAG:
-    """Build the Qdrant index once with setup(), then call ask(question) repeatedly."""
+    """Build a LangChain retriever once with setup(), then call ask(question)."""
 
-    def __init__(
-        self,
-        qdrant_path=None,
-        embed_model_name: str = MODEL_NAME,
-        llm_model: str = LLM_MODEL,
-    ):
+    def __init__(self, qdrant_path=None, llm_model: str = LLM_MODEL):
         self.llm_model = llm_model
         self.qdrant_path = resolve(qdrant_path or QDRANT_PATH)
         print("Loading embedding model...")
-        self.embed_model = load_embedder(embed_model_name)
-        self.qdrant = QdrantClient(path=str(self.qdrant_path))
-        self.is_ready = False
+        self.embeddings = load_embedder()
+        self.llm = load_llm(llm_model)
+        self.client = QdrantClient(path=str(self.qdrant_path))
+        self.store = None
+        self.chain = None
 
     def setup(self, chunks_path: str = DEFAULT_CHUNKS_PATH, rebuild: bool = True) -> None:
-        """Embed chunks and upsert into Qdrant. Run once (or when chunks change)."""
         chunks = [c for c in load_jsonl(chunks_path) if not c.get("is_noise", False)]
-        chunk_ids = [c["chunk_id"] for c in chunks]
-        chunk_texts = [c["text"] for c in chunks]
-
-        print(f"Embedding {len(chunks)} chunks...")
-        vectors = np.asarray(
-            self.embed_model.encode(
-                chunk_texts,
-                normalize_embeddings=True,
-                batch_size=64,
-                show_progress_bar=True,
-                convert_to_tensor=False,
-            ),
-            dtype=np.float32,
-        ).copy()
-        dimension = vectors.shape[1]
+        docs = [
+            Document(
+                page_content=c["text"],
+                metadata={"chunk_id": c["chunk_id"], "doc_id": c["doc_id"]},
+            )
+            for c in chunks
+        ]
 
         if rebuild:
-            print("Building search index...")
+            print(f"Indexing {len(docs)} chunks into Qdrant...")
             try:
-                self.qdrant.delete_collection(COLLECTION_NAME)
+                self.client.delete_collection(COLLECTION_NAME)
             except Exception:
                 pass
-            self.qdrant.create_collection(
+            dim = len(self.embeddings.embed_query("dimension probe"))
+            self.client.create_collection(
                 collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(size=dimension, distance=Distance.COSINE),
+                vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
             )
-            self.qdrant.upsert(
+            self.store = QdrantVectorStore(
+                client=self.client,
                 collection_name=COLLECTION_NAME,
-                points=[
-                    PointStruct(
-                        id=i,
-                        vector=vectors[i].tolist(),
-                        payload={
-                            "chunk_id": chunk_ids[i],
-                            "text": chunk_texts[i],
-                            "doc_id": chunks[i]["doc_id"],
-                        },
-                    )
-                    for i in range(len(chunks))
-                ],
+                embedding=self.embeddings,
             )
-        self.is_ready = True
+            self.store.add_documents(docs, batch_size=256)
+        else:
+            self.store = QdrantVectorStore(
+                client=self.client,
+                collection_name=COLLECTION_NAME,
+                embedding=self.embeddings,
+            )
+
+        retriever = self.store.as_retriever(search_kwargs={"k": 5})
+        self.chain = (
+            {"context": retriever | _format_docs, "question": RunnablePassthrough()}
+            | PROMPT
+            | self.llm
+            | StrOutputParser()
+        )
         print(f"Setup done — index at {self.qdrant_path}")
 
     def search(self, question: str, top_k: int = 5) -> list[dict]:
-        """Return top-k chunk payloads for a question."""
-        if not self.is_ready:
+        if self.store is None:
             raise RuntimeError("Call setup() before search().")
-
-        qvec = np.asarray(
-            self.embed_model.encode(
-                [question],
-                normalize_embeddings=True,
-                convert_to_tensor=False,
-            ),
-            dtype=np.float32,
-        )[0]
-
-        hits = self.qdrant.query_points(
-            collection_name=COLLECTION_NAME,
-            query=qvec.tolist(),
-            limit=top_k,
-        ).points
-        return [hit.payload for hit in hits]
+        docs = self.store.similarity_search(question, k=top_k)
+        return [{"text": d.page_content, **d.metadata} for d in docs]
 
     def ask(self, question: str, top_k: int = 5) -> dict:
-        """Retrieve context, call the local LLM, return answer + sources."""
-        if not self.is_ready:
+        if self.chain is None:
             raise RuntimeError("Call setup() before ask().")
 
         matches = self.search(question, top_k=top_k)
-        context_pieces = [m["text"] for m in matches]
-
         try:
-            raw = call_llm(build_prompt(question, context_pieces), llm_model=self.llm_model)
+            raw = self.chain.invoke(question)
         except Exception as exc:
             raw = ""
             print(f"LLM call failed: {exc}")
@@ -126,10 +118,10 @@ class SimpleRAG:
             "question": question,
             "answer": extract_final_answer(raw),
             "raw_ai_response": raw,
-            "sources": context_pieces,
+            "sources": [m["text"] for m in matches],
             "chunk_ids": [m.get("chunk_id") for m in matches],
             "doc_ids": [m.get("doc_id") for m in matches],
         }
 
     def close(self) -> None:
-        self.qdrant.close()
+        self.client.close()

@@ -13,15 +13,12 @@ Two evaluators live here and they are not interchangeable:
 """
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from langchain_core.embeddings import Embeddings
 
+from src.models import EMBED_MODEL, load_embedder  # noqa: F401 — re-exported
 from src.utils.io import load_jsonl
 
-MODEL_NAME = "BAAI/bge-small-en-v1.5"   # small, fast, strong for its size -- good default for iterating
-
-
-def load_embedder(model_name: str = MODEL_NAME) -> SentenceTransformer:
-    return SentenceTransformer(model_name)
+MODEL_NAME = EMBED_MODEL
 
 
 def load_index_chunks(path) -> list[dict]:
@@ -29,13 +26,13 @@ def load_index_chunks(path) -> list[dict]:
     return [c for c in load_jsonl(path) if not c.get("is_noise", False)]
 
 
-def embed_texts(texts: list[str], model: SentenceTransformer, batch_size: int = 64,
+def embed_texts(texts: list[str], model: Embeddings, batch_size: int = 64,
                 show_progress_bar: bool = True) -> np.ndarray:
     """Returns L2-normalized embeddings so dot product == cosine similarity."""
-    return model.encode(
-        texts, batch_size=batch_size, normalize_embeddings=True,
-        show_progress_bar=show_progress_bar, convert_to_numpy=True,
-    )
+    del batch_size, show_progress_bar  # HuggingFaceEmbeddings encode_kwargs already set these
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+    return np.asarray(model.embed_documents(texts), dtype=np.float32)
 
 
 def cosine_top_k(query_vec, chunk_vecs, chunk_ids, k: int = 5) -> list[str]:
@@ -66,7 +63,7 @@ def word_overlap_relevance(retrieved_text: str, gold_text: str, threshold: float
 
 
 def evaluate_chunking_strategy(chunks: list[dict], eval_examples: list[dict],
-                                model: SentenceTransformer, k_values=(1, 3, 5, 10)) -> dict:
+                                model: Embeddings, k_values=(1, 3, 5, 10)) -> dict:
     """Exact-id scoring. chunks: [{chunk_id, text, ...}], eval_examples: [{question, gold_chunk_ids}]."""
     chunk_ids = [c["chunk_id"] for c in chunks]
     chunk_texts = [c["text"] for c in chunks]
@@ -97,7 +94,7 @@ def gold_text_index(row_level_chunks: list[dict]) -> dict[str, str]:
 
 
 def recall_at_k_by_content(chunks: list[dict], eval_examples: list[dict],
-                            chunk_id_to_gold_text: dict, model: SentenceTransformer,
+                            chunk_id_to_gold_text: dict, model: Embeddings,
                             k: int = 5) -> dict:
     """Single-k content-overlap recall, for sweeping a chunking parameter.
 
@@ -131,7 +128,7 @@ def recall_at_k_by_content(chunks: list[dict], eval_examples: list[dict],
 
 
 def evaluate_chunking_strategy_generic(chunks: list[dict], eval_examples: list[dict],
-                                        chunk_id_to_gold_text: dict, model: SentenceTransformer,
+                                        chunk_id_to_gold_text: dict, model: Embeddings,
                                         k_values=(1, 3, 5, 10)) -> dict:
     """Content-overlap scoring, valid across chunking strategies."""
     chunk_ids = [c["chunk_id"] for c in chunks]
