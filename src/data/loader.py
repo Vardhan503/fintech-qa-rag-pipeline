@@ -17,6 +17,20 @@ def program_ops(program: str) -> list[str]:
     """Operation names in a FinQA program: divide, subtract, table_sum, ..."""
     return re.findall(r"([a-z_]+)\(", program or "")
 
+# example
+#  ├── pre_text
+#  ├── post_text
+#  ├── table
+#  ├── table_ori
+#  ├── qa
+#  │    ├── question
+#  │    ├── answer
+#  │    ├── program
+#  │    ├── ann_table_rows
+#  │    ├── ann_text_rows
+#  │    └── ...
+#  ├── id
+#  └── filename
 
 def flatten_example(ex: dict) -> dict:
     """Flatten one raw example into a single row for tabular EDA."""
