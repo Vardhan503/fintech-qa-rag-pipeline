@@ -1,0 +1,143 @@
+{
+  "baseline": {
+    "multihop": {
+      "n": 24,
+      "recall": 0.375,
+      "precision": 0.19166666666666668,
+      "avg_latency_s": 0.02278536558151245
+    },
+    "control": {
+      "n": 34,
+      "recall": 0.6470588235294118,
+      "precision": 0.12941176470588237,
+      "avg_latency_s": 0.02146007032955394
+    },
+    "vocab": {
+      "n": 6,
+      "recall": 0.16666666666666666,
+      "precision": 0.03333333333333333,
+      "avg_latency_s": 0.022030353546142578
+    },
+    "ALL": {
+      "n": 64,
+      "recall": 0.5,
+      "precision": 0.14375000000000002,
+      "avg_latency_s": 0.022010520100593567
+    }
+  },
+  "hyde": {
+    "multihop": {
+      "n": 24,
+      "recall": 0.125,
+      "precision": 0.075,
+      "avg_latency_s": 21.025333672761917
+    },
+    "control": {
+      "n": 34,
+      "recall": 0.4411764705882353,
+      "precision": 0.08823529411764706,
+      "avg_latency_s": 20.644519763834335
+    },
+    "vocab": {
+      "n": 6,
+      "recall": 0.0,
+      "precision": 0.0,
+      "avg_latency_s": 21.248150666554768
+    },
+    "ALL": {
+      "n": 64,
+      "recall": 0.28125,
+      "precision": 0.07500000000000001,
+      "avg_latency_s": 20.84391537681222
+    }
+  },
+  "multi_query": {
+    "multihop": {
+      "n": 24,
+      "recall": 0.3333333333333333,
+      "precision": 0.16666666666666666,
+      "avg_latency_s": 7.200440774361293
+    },
+    "control": {
+      "n": 34,
+      "recall": 0.6470588235294118,
+      "precision": 0.12941176470588237,
+      "avg_latency_s": 7.172841899535236
+    },
+    "vocab": {
+      "n": 6,
+      "recall": 0.16666666666666666,
+      "precision": 0.03333333333333333,
+      "avg_latency_s": 7.505915284156799
+    },
+    "ALL": {
+      "n": 64,
+      "recall": 0.484375,
+      "precision": 0.134375,
+      "avg_latency_s": 7.214417107403278
+    }
+  },
+  "step_back": {
+    "multihop": {
+      "n": 24,
+      "recall": 0.34722222222222227,
+      "precision": 0.17500000000000002,
+      "avg_latency_s": 2.3705022732416787
+    },
+    "control": {
+      "n": 34,
+      "recall": 0.6470588235294118,
+      "precision": 0.12941176470588237,
+      "avg_latency_s": 2.2341961229548737
+    },
+    "vocab": {
+      "n": 6,
+      "recall": 0.16666666666666666,
+      "precision": 0.03333333333333333,
+      "avg_latency_s": 2.3796446720759072
+    },
+    "ALL": {
+      "n": 64,
+      "recall": 0.4895833333333333,
+      "precision": 0.1375,
+      "avg_latency_s": 2.2989467307925224
+    }
+  },
+  "decompose": {
+    "multihop": {
+      "n": 24,
+      "recall": 0.4375,
+      "precision": 0.21666666666666667,
+      "avg_latency_s": 5.442034433285396
+    },
+    "control": {
+      "n": 34,
+      "recall": 0.6176470588235294,
+      "precision": 0.12352941176470589,
+      "avg_latency_s": 5.007977913407719
+    },
+    "vocab": {
+      "n": 6,
+      "recall": 0.16666666666666666,
+      "precision": 0.03333333333333333,
+      "avg_latency_s": 5.41244622071584
+    },
+    "ALL": {
+      "n": 64,
+      "recall": 0.5078125,
+      "precision": 0.15,
+      "avg_latency_s": 5.208668012171984
+    }
+  },
+  "query_rewrite_conversational": {
+    "n": 5,
+    "raw_followup_hit_rate": 0.2,
+    "rewritten_hit_rate": 0.8
+  },
+  "sample_size": 64,
+  "sample_failure_mode_composition": {
+    "multihop": 24,
+    "control": 34,
+    "vocab": 6
+  }
+}
