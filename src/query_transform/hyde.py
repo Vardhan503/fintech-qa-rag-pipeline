@@ -14,13 +14,40 @@ No hand-rolled prompt needed here; this is 100% library.
 from langchain_classic.chains import HypotheticalDocumentEmbedder
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseLanguageModel
+from langchain_core.prompts import PromptTemplate
 from langchain_core.vectorstores import VectorStore
 
+# The library's built-in "fiqa" prompt asks for a narrative "financial
+# article passage" -- a style mismatch against this corpus's actual gold
+# chunks, which are terse table-row facts ("Payments Volume (billions) is
+# $2,457; ..."). This custom prompt asks for that same terse style instead.
+# A/B this against prompt_key="fiqa" below once diagnostic_hyde_inspect.py
+# confirms the style-mismatch hypothesis.
+ROW_LEVEL_HYDE_PROMPT = PromptTemplate(
+    input_variables=["QUESTION"],
+    template=(
+        "Write ONE short, dense sentence in the exact style of a financial "
+        "report table row that would contain the answer to this question. "
+        "Use the pattern 'Metric name is value; Metric name is value;' with "
+        "plausible-sounding company/metric names and numbers. Do NOT write "
+        "a paragraph or explanation -- output only the single row-style "
+        "sentence.\n\nQuestion: {QUESTION}\nRow:"
+    ),
+)
 
-def build_hyde_embedder(llm: BaseLanguageModel, base_embeddings: Embeddings) -> HypotheticalDocumentEmbedder:
-    return HypotheticalDocumentEmbedder.from_llm(
-        llm, base_embeddings, prompt_key="fiqa"
-    )
+
+def build_hyde_embedder(llm: BaseLanguageModel, base_embeddings: Embeddings,
+                         style: str = "row_level") -> HypotheticalDocumentEmbedder:
+    """style='fiqa' uses LangChain's financial-article prompt;
+    style='row_level' uses a terse table-row prompt matched to FinQA gold text.
+    """
+    if style == "fiqa":
+        return HypotheticalDocumentEmbedder.from_llm(llm, base_embeddings, prompt_key="fiqa")
+    if style == "row_level":
+        return HypotheticalDocumentEmbedder.from_llm(
+            llm, base_embeddings, custom_prompt=ROW_LEVEL_HYDE_PROMPT
+        )
+    raise ValueError(f"unknown HyDE style {style!r}; expected 'fiqa' or 'row_level'")
 
 
 def hyde_search(vectorstore: VectorStore, question: str,
