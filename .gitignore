@@ -1,11 +1,13 @@
 .ipynb_checkpoints/
 __pycache__/
 *.pyc
+.DS_Store
 .venv/
 venv/
 .env
-.DS_Store
 .cursor/
 data/processed/chroma_db/
 data/processed/qdrant_db/
 data/processed/qdrant_db_final/
+*.ipynb
+
